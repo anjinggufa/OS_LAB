@@ -12,13 +12,11 @@ sem_t *signal = NULL;
 void *sell(void *arg){
 	int temp;
 	for(int i = 0;i < atoi(arg);i++){
-		//sem_wait(signal);
 		temp = ticketCount;
-		//pthread_yield();
+		pthread_yield();
 		temp = temp - 1;
-		//pthread_yield();
+		pthread_yield();
 		ticketCount = temp;
-		//sem_post(signal);
 	}
 	return NULL;
 }
@@ -26,13 +24,11 @@ void *sell(void *arg){
 void *refund(void *arg){
 	int temp;
 	for(int i = 0;i < atoi(arg);i++){
-		//sem_wait(signal);
 		temp = ticketCount;
-		//pthread_yield();
+		pthread_yield();
 		temp = temp + 1;
-		//pthread_yield();
+		pthread_yield();
 		ticketCount = temp;
-		//sem_post(signal);
 	}
 	return NULL;
 }

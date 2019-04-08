@@ -1,0 +1,1624 @@
+## 操作系统实验三 同步问题
+
+> ​                                                                                                          16281049   王晗炜  计科1601
+
+#### 实验目的
+
+- **系统调用的进一步理解**
+- **进程上下文切换**
+- **同步的方法**
+
+#### 实验题目
+
+1. **通过fork的方式，产生4个进程P1,P2,P3,P4，每个进程打印输出自己的名字，例如P1输出“I am the process P1”。要求P1最先执行，P2、P3互斥执行，P4最后执行。通过多次测试验证实现是否正确。**
+
+   - 根据题目执行顺序要求画出前驱图
+
+     ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1oqoscb11j305x05udfs.jpg)
+
+     
+
+   - 四个进程实现前驱关系所需要的信号量
+
+     经分析可知若需达到以上执行顺序的要求，共需要三个信号量来进行进程之间的约束：
+
+     - **mySem_1**：保证P2和P3在P1之后互斥执行，初始值为0
+     - **mySem_2**：保证P4在P2之后运行，初始值为0
+     - **mySem_3**：保证P4在P3之后运行，初始值为0
+
+     | 进程 |               执行前                |               执行后                |
+     | :--: | :---------------------------------: | :---------------------------------: |
+     |  P1  |                 无                  |          sem_post(mySem_1)          |
+     |  P2  |          sem_wait(mySem_1)          | sem_post(mySem_1) sem_post(mySem_2) |
+     |  P3  |          sem_wait(mySem_1)          | sem_post(mySem_1) sem_post(mySem_3) |
+     |  P4  | sem_wait(mySem_2) sem_wait(mySem_3) | sem_post(mySem_2) sem_post(mySem_3) |
+
+     在进程执行的过程中，因为三个信号量的初始值均为0，只有P1执行前没有wait要求，因此P1一定会是第一个执行的，在其执行完成后，会对mySem_1信号量进行post操作，使其值变为1，如此处于wait状态下的P2和P3进程便可有一个可以进行工作、另一个继续等待，当其中一个执行完成后会再次post信号量mySem_1，另一个进程也可进入工作，如此便可完美实现互斥执行。而对于P4，信号量mySem_2和mySem_3对其的约束使得其只能在P2和P3均完成工作后进入工作，所以P4一定是最后一个进入工作的进程。
+
+     如此一来，四个进程的前驱关系便通过这三个信号量实现了。
+
+   - 实现源码`3-1.c`：
+
+     ```c
+     #include <stdio.h>
+     #include <stdlib.h>
+     #include <pthread.h>
+     #include <unistd.h>
+     #include <fcntl.h>
+     #include <semaphore.h>
+     
+     int main(int argc,char *argv[]){
+     	sem_t *mySem_1 = NULL; //控制p1、p2和p3进程打信号量
+     	sem_t *mySem_2 = NULL; //控制p4进程打信号量
+     	sem_t *mySem_3 = NULL; //控制p4进程打信号量
+     	mySem_1 = sem_open("mySemName_1",O_CREAT,0666,0);
+     	mySem_2 = sem_open("mySemName_2",O_CREAT,0666,0);
+     	mySem_3 = sem_open("mySemName_3",O_CREAT,0666,0);
+     	pid_t pid_1,pid_2,pid_3,pid_4;
+     	pid_2 = fork();
+     	if(pid_1 == 0){
+     		pid_2 = fork();
+     		if(pid_2 == 0){
+     			pid_3 = fork();
+     			if(pid_3 == 0){
+     				pid_4 = fork();
+     				if(pid_4 == 0){
+     					sem_wait(mySem_2);
+     					sem_wait(mySem_3);
+     					printf("I an the process P4\n");
+     					sem_post(mySem_2);
+     					sem_post(mySem_3);				
+     				}
+     				else if(pid_4>0){
+     					sem_wait(mySem_1);
+     					printf("I an the process P3\n");
+     					sem_post(mySem_1);	
+     					sem_post(mySem_3);	
+     				}		
+     			}
+     			else if(pid_3>0){
+     				sem_wait(mySem_1);
+     				printf("I an the process P2\n");
+     				sem_post(mySem_1);	
+     				sem_post(mySem_2);			
+     			}	
+     		}
+     		else if(pid_2>0){
+     			printf("I an the process P1\n");
+     	        sem_post(mySem_1);
+     		}
+     	}
+     	sem_close(mySem_1);
+     	sem_close(mySem_2);
+     	sem_close(mySem_3);
+     	unlink("mySemName_1");
+     	unlink("mySemName_2");
+     	unlink("mySemName_3");
+     	return 0;
+     }
+     ```
+
+   - 源码执行流程图
+
+     题目中要求使用fork的方式创建4个进程，而进程工作执行的顺序已由上文给出，因此以下只给出程序创建进程的顺序。
+
+     ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1oqph0cx7j30uf05faaq.jpg)
+
+     
+
+   - 测试情况
+
+     在Linux终端下使用gcc编译该源程序
+
+     ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1oqqflbp5j31by00v74o.jpg)
+
+     连续多次运行程序并观察结果：
+
+     ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1oqr34yt4j30xq0getdp.jpg)
+
+     可知只会出现P1->P2->P3->P4和P1->P3->P2->P4两种运行次序，与此前分析的一致。
+
+2. **火车票余票数ticketCount 初始值为1000，有一个售票线程，一个退票线程，各循环执行多次。添加同步机制，使得结果始终正确。要求多次测试添加同步机制前后的实验效果。**(*说明：为了更容易产生并发错误，可以在适当的位置增加一些pthread_yield()，放弃CPU，并强制线程频繁切换，例如售票线程的关键代码：*
+
+   *temp=ticketCount;*
+
+   *pthread_yield();*
+
+   *temp=temp-1;*
+
+   *pthread_yield();*
+
+   *ticketCount=temp;*
+
+   *退票线程的关键代码：*
+
+   *temp=ticketCount;*
+
+   *pthread_yield();*
+
+   *temp=temp+1;*
+
+   *pthread_yield();*
+
+   *ticketCount=temp;*
+
+   ）
+
+   - 问题分析
+
+     这个问题实质上是一个多线程访问并修改临界资源的问题，如果两个线程在不加约束的情况下对临界资源进行修改则会使得有的线程会读取脏数据，造成错误。这里我们便需要使用一个信号量来制造两个线程之间的互斥访问，使得每次读取的数据都是正确的。
+
+     在现实生活中火车票的购票与退票是一个并发量巨大的实际问题，这里我们的程序中只有两个线程，肯定是不能与其相提并论的，因此这里为了更加贴近其并发数量，使用了pthread_yield函数。此函数的作用为使当前线程暂时放弃CPU，使用另一个级别等于或高于当前线程的线程先运行。如果没有符合条件的线程，那么这个函数将会立刻返回然后继续执行当前线程的程序。因此在程序加入此函数会增加线程之间的切换，增加并发带来的脏数据问题。
+
+   - 未添加同步代码及测试
+
+     程序源代码`3-2_1.c`：
+
+     ```c
+     #include <stdio.h>
+     #include <stdlib.h>
+     #include <pthread.h>
+     #include <unistd.h>
+     #include <fcntl.h>
+     #include <sys/stat.h>
+     #include <semaphore.h>
+     
+     volatile int ticketCount = 1000;
+     
+     void *sell(void *arg){
+     	int temp;
+     	for(int i = 0;i < atoi(arg);i++){
+     		temp = ticketCount;
+     		pthread_yield();
+     		temp = temp - 1;
+     		pthread_yield();
+     		ticketCount = temp;
+     	}
+     	return NULL;
+     }
+     
+     void *refund(void *arg){
+     	int temp;
+     	for(int i = 0;i < atoi(arg);i++){
+     		temp = ticketCount;
+     		pthread_yield();
+     		temp = temp + 1;
+     		pthread_yield();
+     		ticketCount = temp;
+     	}
+     	return NULL;
+     }
+     
+     int main(int argc,char *argv[]){
+     	pthread_t p1,p2;
+     	if(argc!=3){
+     		printf("3-2<sell_num refund_num>\n");
+     		exit(1);
+     	}
+     	signal = sem_open("signal",O_CREAT,0666,1);
+     	pthread_create(&p1,NULL,sell,argv[1]);
+     	pthread_create(&p2,NULL,refund,argv[2]);
+     	pthread_join(p1,NULL);
+     	pthread_join(p2,NULL);
+     	printf("余票数为：%d\n",ticketCount);
+     	sem_close(signal);
+     	return 0;
+     }
+     ```
+
+     此程序除main函数外含两个函数，分别为sell售票函数，refund退票函数。ticketCount函数可被多个线程访问，代表余下的票数。
+
+     在程序运行时，需要输入两个参数，分别代表售票数和退票数，否则便会直接在屏幕上打印出*3-2<sell_num refund_num>*提示错误。
+
+     下面在Linux终端对程序进行编译并运行测试：
+
+     ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1oqslbca5j30ov01oweq.jpg)
+
+     ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1oqss5u0ij30oy07jach.jpg)
+
+     测试条件为卖票1000张，退票800张，正确的余票数应该为800张（1000-1000+800），但运行的5次结果无一为800且各不相同。这其实就是刚刚所说的读取脏数据带来的错误，具有很大的随机性，经分析我们可以得到次程序如此条件运行后的结果范围：
+
+     - 最小值：0，假设售票线程和退票线程在开始一同读取了ticketCount（1000），此时退票线程先进行了800次，ticketCount被写为1800，但此后售票线程开始执行，其不会再次读取最新的ticketCount值，第一次执行写回的值为999（1000-1），直接将刚刚退票线程写入的1800覆盖了，之后再执行999次便会得到0余票，这是得到最小值的情况。
+     - 最大值：1800，假设售票线程和退票线程在开始一同读取了ticketCount（1000），此时售票线程先进行了1000次，ticketCount被写为0，但此后退票线程开始执行，其不会再次读取最新的ticketCount值，第一次执行写回的值为1001（1000+1），直接将刚刚退票线程写入的0覆盖了，之后再执行799次便会得到800余票，这是得到最大值的情况。
+
+     可知以上结果均在[0,1800]区间内，符合分析预期。
+
+   - 添加同步之后的代码及测试
+
+     在程序中使用信号量signal，将其初值设置为1，在售票进程或退票进程之前需进行sem_wait(signal)操作，访问完成之后再进行sem_post(signal)操作，如此便可实现两个线程之间互斥运行，以下为修改过后的源码`3-2_2.c`：
+
+     ```c
+     #include <stdio.h>
+     #include <stdlib.h>
+     #include <pthread.h>
+     #include <unistd.h>
+     #include <fcntl.h>
+     #include <sys/stat.h>
+     #include <semaphore.h>
+     
+     volatile int ticketCount = 1000;
+     sem_t *signal = NULL;
+     
+     void *sell(void *arg){
+     	int temp;
+     	for(int i = 0;i < atoi(arg);i++){
+     		sem_wait(signal);
+     		temp = ticketCount;
+     		pthread_yield();
+     		temp = temp - 1;
+     		pthread_yield();
+     		ticketCount = temp;
+     		sem_post(signal);
+     	}
+     	return NULL;
+     }
+     
+     void *refund(void *arg){
+     	int temp;
+     	for(int i = 0;i < atoi(arg);i++){
+     		sem_wait(signal);
+     		temp = ticketCount;
+     		pthread_yield();
+     		temp = temp + 1;
+     		pthread_yield();
+     		ticketCount = temp;
+     		sem_post(signal);
+     	}
+     	return NULL;
+     }
+     
+     int main(int argc,char *argv[]){
+     	pthread_t p1,p2;
+     	if(argc!=3){
+     		printf("3-2<sell_num refund_num>\n");
+     		exit(1);
+     	}
+     	signal = sem_open("signal",O_CREAT,0666,1);
+     	pthread_create(&p1,NULL,sell,argv[1]);
+     	pthread_create(&p2,NULL,refund,argv[2]);
+     	pthread_join(p1,NULL);
+     	pthread_join(p2,NULL);
+     	printf("余票数为：%d\n",ticketCount);
+     	sem_close(signal);
+     	return 0;
+     }
+     ```
+
+     在Linux终端下编译并运行：
+
+     ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1oqt0ld5uj30oo01i3yr.jpg)
+
+     ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1oqt4xhehj30jw07qdic.jpg)
+
+     可见得到的结果均正确，可见该问题可以通过信号量互斥访问解决。
+
+3. **一个生产者一个消费者线程同步。设置一个线程共享的缓冲区， char buf[10]。一个线程不断从键盘输入字符到buf,一个线程不断的把buf的内容输出到显示器。要求输出的和输入的字符和顺序完全一致。（在输出线程中，每次输出睡眠一秒钟，然后以不同的速度输入测试输出是否正确）。要求多次测试添加同步机制前后的实验效果。**
+
+   - 问题分析
+
+     此题是一个经典的生产者和消费者问题：输入线程产生字符，输出线程消耗字符，如果不考虑同步机制就让两个进程同时运行的话便会出现如下问题：
+
+     - 输入进程产生字符过快，buf数组的资源被用尽，继续输入会导致数组越界或者之前输入的字符还未打印便被覆盖
+     - 输出进程消耗字符过快，继续输出则会访问到为初始化的数组元素或者将之前打印过的字符再次打印
+
+     根据以上存在的问题，我们可以通过使用信号量来实现两个进程之间的同步。略经分析我们需要初始化两个信号量：full和empty，其中full保证未打印的字符不超过10，empty保证存在需要打印的字符再进行打印。
+
+     | 线程  |     执行前      |     执行后      |
+     | :---: | :-------------: | :-------------: |
+     | scan  | sem_wait(full)  | sem_post(empty) |
+     | print | sem_wait(empty) | sem_post(full)  |
+
+   - 未添加同步机制程序源码及其运行测试
+
+     未添加同步机制的源代码`3-3_1.c`：
+
+     ```c
+     #include <stdio.h>
+     #include <stdlib.h>
+     #include <pthread.h>
+     #include <unistd.h>
+     
+     char buf[10];
+     
+     void *scan(void *arg){
+     	int i = 0;
+     	while(1){
+     		scanf("%c",&buf[(i++)%10]);
+     	}
+     }
+     
+     void *print(void *arg){
+     	int i = 0;
+     	while(1){
+     		printf("输出buf[%d]：%c\n",i%10,buf[i%10]);
+             i++;
+     		sleep(1);
+     	}
+     	return NULL;
+     }
+     
+     int main(int argc,char *argv[]){
+     	pthread_t p1,p2;
+     	pthread_create(&p1,NULL,scan,NULL);
+     	pthread_create(&p2,NULL,print,NULL);
+     	pthread_join(p1,NULL);
+     	pthread_join(p2,NULL);
+     	return 0;
+     }
+     ```
+
+     在Linux终端下编译并运行：
+
+     ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1oqtd363gj30n600ljrf.jpg)
+
+     输入过快：
+
+     ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1oqtktn82j30ih0d0758.jpg)
+
+     此程序一开始执行便可看到尽管还没有进行输入，输出线程已经开始运行，输出的均为空字符，当一次性输入了一长串字符后，输出线程的输出开始有了内容，仔细观察易知和我们输入的顺序不完全一致，这便是因为输入过快导致还未被打印的字符被覆盖，buf字符串最多只能装载十个字符，当完成这一串输入之后buf内的值应为下表所示：
+
+     | buf[0] | buf[1] | buf[2] | buf[3] | buf[4] | buf[5] | buf[6] | buf[7] | buf[8] | buf[9] |
+     | :----: | :----: | :----: | :----: | :----: | :----: | :----: | :----: | :----: | :----: |
+     |   a    |   s    |   g    |   s    |   a    |   g    |   a    |   g    |   \n   |   g    |
+
+     与结果相比对完全一致。
+
+     输出过快：
+
+     ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1oqtrqbv4j30ho0eoab3.jpg)
+
+     这里只输入123456789\n共十个字符串，接着分析输出线程的工作。当输入线程完成输入后，输出进程已经打印了好几个空字符，故没有从buf[0]开始打印，打印的次序便出了一些问题，当打印完buf[9]之后，其又将buf重新打印了一遍，在此过程中buf的值并未进行跟新，因此前文我们分析会出现的两个问题均在此程序中体现了。
+
+   - 添加同步机制程序及其运行测试
+
+     添加同步机制后的源程序`3-3_2.c`：
+
+     ```c
+     #include <stdio.h>
+     #include <stdlib.h>
+     #include <pthread.h>
+     #include <unistd.h>
+     #include <fcntl.h>
+     #include <sys/stat.h>
+     #include <semaphore.h>
+     
+     char buf[10];
+     
+     sem_t *full = NULL;
+     sem_t *empty = NULL;
+     
+     void *scan(void *arg){
+     	int i = 0;
+     	while(1){
+     		sem_wait(full);
+     		scanf("%c",&buf[(i++)%10]);
+     		sem_post(empty);
+     	}
+     }
+     
+     void *print(void *arg){
+     	int i = 0;
+     	while(1){
+     		sem_wait(empty);
+     		printf("输出buf[%d]：%c\n",i%10,buf[i%10]);
+     		i++;
+     		sem_post(full);
+     		sleep(1);
+     	}
+     	return NULL;
+     }
+     
+     int main(int argc,char *argv[]){
+     	pthread_t p1,p2;
+     	full = sem_open("full",O_CREAT,0666,10);
+     	empty = sem_open("empty",O_CREAT,0666,0);
+     	pthread_create(&p1,NULL,scan,NULL);
+     	pthread_create(&p2,NULL,print,NULL);
+     	pthread_join(p1,NULL);
+     	pthread_join(p2,NULL);
+     	sem_close(full);
+     	sem_close(empty);
+     	unlink("full");
+     	unlink("empty");
+     	return 0;
+     }
+     ```
+
+     在Linux终端下编译并运行：
+
+     ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1oqtx598jj30nx00pdfw.jpg)
+
+     ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1oqu34zt4j30i001c0sq.jpg)
+
+     在程序运行的一开始，输入线程未输入任何字符，这是输出线程被阻塞，不会打印任何字符，符合要求。
+
+     ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1oqub1g2fj30ho08bmxi.jpg)
+
+     当输入字符串长度大于10时，输出线程仍能按序输出这12个字符，符合要求。这里值得注意的是scanf函数在输入的过程中存在一个缓冲区，每次输入的字符会线存入缓冲区，当输入\n之后scanf函数便会从缓冲区中取出需要类型的字符，知道没有，因此这里的输入线程在实际运行过程中是受full信号量的阻塞控制的，但在实际工作过程中难以被察觉，直接的体现就是能是每个曾经输入的字符按序输出。
+
+     ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1oqugfughj30hw0fzwf9.jpg)
+
+     当一边输入少量字符一边输出时，我们可以看到以上结果仍正确无误，至此说明通过田间full和empty信号量能够完美实现输入和输出线程之间的同步。
+
+4. **进程通信问题。阅读并运行共享内存、管道、消息队列三种机制的代码**
+
+   1. 通过实验测试，验证共享内存的代码中，receiver能否正确读出sender发送的字符串？如果把其中互斥的代码删除，观察实验结果有何不同？如果在发送和接收进程中打印输出共享内存地址，他们是否相同，为什么？
+
+      - 测试博客中给出的原始代码
+
+        发送进程的源代码`Sender_1.c`：
+
+        ```c
+        /*
+         * Filename: Sender.c
+         * Description: 
+         */
+        
+        #include <stdio.h>
+        #include <stdlib.h>
+        #include <unistd.h>
+        #include <sys/sem.h>
+        #include <sys/ipc.h>
+        #include <sys/shm.h>
+        #include <sys/types.h>
+        #include <string.h>
+        
+        int main(int argc, char *argv[])
+        {
+            key_t  key;
+            int shm_id;
+            int sem_id;
+            int value = 0;
+        
+            //1.Product the key
+            key = ftok(".", 0xFF);
+        
+            //2. Creat semaphore for visit the shared memory
+            sem_id = semget(key, 1, IPC_CREAT|0644);
+            if(-1 == sem_id)
+            {
+                perror("semget");
+                exit(EXIT_FAILURE);
+            }
+        
+            //3. init the semaphore, sem=0
+            if(-1 == (semctl(sem_id, 0, SETVAL, value)))
+            {
+                perror("semctl");
+                exit(EXIT_FAILURE);
+            }
+        
+            //4. Creat the shared memory(1K bytes)
+            shm_id = shmget(key, 1024, IPC_CREAT|0644);
+            if(-1 == shm_id)
+            {
+                perror("shmget");
+                exit(EXIT_FAILURE);
+            }
+        
+            //5. attach the shm_id to this process
+            char *shm_ptr;
+            shm_ptr = shmat(shm_id, NULL, 0);
+            if(NULL == shm_ptr)
+            {
+                perror("shmat");
+                exit(EXIT_FAILURE);
+            }
+        
+            //6. Operation procedure
+            struct sembuf sem_b;
+            sem_b.sem_num = 0;      //first sem(index=0)
+            sem_b.sem_flg = SEM_UNDO;
+            sem_b.sem_op = 1;           //Increase 1,make sem=1
+            
+            while(1)
+            {
+                if(0 == (value = semctl(sem_id, 0, GETVAL)))
+                {
+                    printf("\nNow, snd message process running:\n");
+                    printf("\tInput the snd message:  ");
+                    scanf("%s", shm_ptr);
+        
+                    if(-1 == semop(sem_id, &sem_b, 1))
+                    {
+                        perror("semop");
+                        exit(EXIT_FAILURE);
+                    }
+                }
+        
+                //if enter "end", then end the process
+                if(0 == (strcmp(shm_ptr ,"end")))
+                {
+                    printf("\nExit sender process now!\n");
+                    break;
+                }
+            }
+        
+            shmdt(shm_ptr);
+        
+            return 0;
+        }
+        ```
+
+        接收进程的源代码`Receiver_1.c`：
+
+        ```c
+        /*
+         * Filename: Receiver.c
+         * Description: 
+         */
+        
+        #include <stdio.h>
+        #include <stdlib.h>
+        #include <unistd.h>
+        #include <sys/sem.h>
+        #include <sys/ipc.h>
+        #include <sys/shm.h>
+        #include <sys/types.h>
+        #include <string.h>
+        
+        int main(int argc, char *argv[])
+        {
+            key_t  key;
+            int shm_id;
+            int sem_id;
+            int value = 0;
+        
+            //1.Product the key
+            key = ftok(".", 0xFF);
+        
+            //2. Creat semaphore for visit the shared memory
+            sem_id = semget(key, 1, IPC_CREAT|0644);
+            if(-1 == sem_id)
+            {
+                perror("semget");
+                exit(EXIT_FAILURE);
+            }
+        
+            //3. init the semaphore, sem=0
+            if(-1 == (semctl(sem_id, 0, SETVAL, value)))
+            {
+                perror("semctl");
+                exit(EXIT_FAILURE);
+            }
+        
+            //4. Creat the shared memory(1K bytes)
+            shm_id = shmget(key, 1024, IPC_CREAT|0644);
+            if(-1 == shm_id)
+            {
+                perror("shmget");
+                exit(EXIT_FAILURE);
+            }
+        
+            //5. attach the shm_id to this process
+            char *shm_ptr;
+            shm_ptr = shmat(shm_id, NULL, 0);
+            if(NULL == shm_ptr)
+            {
+                perror("shmat");
+                exit(EXIT_FAILURE);
+            }
+        
+            //6. Operation procedure
+            struct sembuf sem_b;
+            sem_b.sem_num = 0;      //first sem(index=0)
+            sem_b.sem_flg = SEM_UNDO;
+            sem_b.sem_op = -1;           //Increase 1,make sem=1
+            
+            while(1)
+            {
+                if(1 == (value = semctl(sem_id, 0, GETVAL)))
+                {
+                    printf("\nNow, receive message process running:\n");
+                    printf("\tThe message is : %s\n", shm_ptr);
+        
+                    if(-1 == semop(sem_id, &sem_b, 1))
+                    {
+                        perror("semop");
+                        exit(EXIT_FAILURE);
+                    }
+                }
+        
+                //if enter "end", then end the process
+                if(0 == (strcmp(shm_ptr ,"end")))
+                {
+                    printf("\nExit the receiver process now!\n");
+                    break;
+                }
+            }
+        
+            shmdt(shm_ptr);
+            //7. delete the shared memory
+            if(-1 == shmctl(shm_id, IPC_RMID, NULL))
+            {
+                perror("shmctl");
+                exit(EXIT_FAILURE);
+            }
+        
+            //8. delete the semaphore
+            if(-1 == semctl(sem_id, 0, IPC_RMID))
+            {
+                perror("semctl");
+                exit(EXIT_FAILURE);
+            }
+        
+            return 0;
+        }
+        ```
+
+        分别在两个Linux终端下编译并运行：
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1rrjcpvhkj30ux028gm3.jpg)
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1rriv5mojj30v201x0t8.jpg)
+
+        首先在Sender_1进程中输入字符串：hello!
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1rrkwzc7sj30m801yjrc.jpg)
+
+        随后Receiver_1.c进程已经接收到响应字符串：
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1rrno9t4kj30jk02haa0.jpg)
+
+        输入字符串communication再次进行测试:
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1rrqnk28bj30i601w0sp.jpg)
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1rrr0a6guj30is021weg.jpg)
+
+        可见receiver能够完全正确地读出sender发出的信息，随后在Sender进程中输入end字符串，两个进程均退出：
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1rrstz21zj30iv02bq2z.jpg)
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1rrt5kbrqj30jj01c744.jpg)
+
+      - 删除互斥代码再次进行测试
+
+        这两个进程也是使用信号量实现的同步机制，其核心的函数为`semop（）`和`semctl（）`，我们可以先查阅相关资料来了解其工作机制：
+
+        semop()函数：
+
+        > semop(完成对信号量的P操作或V操作)
+        >
+        > **所需头文件**
+        >
+        > #include <sys/types.h>
+        >
+        > #include <sys/ipc.h>
+        >
+        > #include <sys/sem.h>
+        >
+        > **函数说明**
+        >
+        > 对信号量集标识符为semid中的一个或多个信号量进行P操作或V操作
+        >
+        > **函数原型**
+        >
+        > int semop(int semid, struct sembuf *sops, unsigned nsops)
+        >
+        > **函数传入值**
+        >
+        > semid：信号量集标识符
+        >
+        > sops：指向进行操作的信号量集结构体数组的首地址，此结构的具体说明如下：
+        >
+        > struct sembuf {
+        >
+        >     short semnum; /*信号量集合中的信号量编号，0代表第1个信号量*/
+        >    
+        >     short val;/*若val>0进行V操作信号量值加val，表示进程释放控制的资源 */
+        >
+        > /*若val<0进行P操作信号量值减val，若(semval-val)<0（semval为该信号量值），则调用进程阻塞，直到资源可用；若设置IPC_NOWAIT不会睡眠，进程直接返回EAGAIN错误*/
+        >
+        >   /*若val==0时阻塞等待信号量为0，调用进程进入睡眠状态，直到信号值为0；若设置IPC_NOWAIT，进程不会睡眠，直接返回EAGAIN错误*/
+        >
+        >     short flag;  /*0 设置信号量的默认操作*/
+        >
+        > /*IPC_NOWAIT设置信号量操作不等待*/
+        >
+        > /*SEM_UNDO 选项会让内核记录一个与调用进程相关的UNDO记录，如果该进程崩溃，则根据这个进程的UNDO记录自动恢复相应信号量的计数值*/
+        >
+        >   };
+        >
+        > nsops：进行操作信号量的个数，即sops结构变量的个数，需大于或等于1。最常见设置此值等于1，只完成对一个信号量的操作
+        >
+        > **函数返回值**
+        >
+        > 成功：返回信号量集的标识符
+        >
+        > 出错：-1，错误原因存于error中
+        >
+        > **错误代码**
+        >
+        > E2BIG：一次对信号量个数的操作超过了系统限制
+        >
+        > EACCESS：权限不够
+        >
+        > EAGAIN：使用了IPC_NOWAIT，但操作不能继续进行
+        >
+        > EFAULT：sops指向的地址无效
+        >
+        > EIDRM：信号量集已经删除
+        >
+        > EINTR：当睡眠时接收到其他信号
+        >
+        > EINVAL：信号量集不存在,或者semid无效
+        >
+        > ENOMEM：使用了SEM_UNDO，但无足够的内存创建所需的数据结构
+        >
+        > ERANGE：信号量值超出范围
+
+        semctl()函数：
+
+        > semctl (得到一个信号量集标识符或创建一个信号量集对象)
+        >
+        > **所需头文件**
+        >
+        > #include <sys/types.h>
+        >
+        > #include <sys/ipc.h>
+        >
+        > #include <sys/sem.h>
+        >
+        > **函数说明**
+        >
+        > 得到一个信号量集标识符或创建一个信号量集对象并返回信号量集标识符
+        >
+        > **函数原型**
+        >
+        > int semctl(int semid, int semnum, int cmd, union semun arg)
+        >
+        > **函数传入值**
+        >
+        > semid
+        >
+        > 信号量集标识符
+        >
+        > semnum
+        >
+        > 信号量集数组上的下标，表示某一个信号量
+        >
+        > cmd
+        >
+        > 见下文表格
+        >
+        > arg
+        >
+        > union semun {
+        >
+        >    short val;          /*SETVAL用的值*/
+        >
+        >    struct semid_ds* buf; /*IPC_STAT、IPC_SET用的semid_ds结构*/
+        >
+        >    unsigned short* array; /*SETALL、GETALL用的数组值*/
+        >
+        >    struct seminfo *buf;   /*为控制IPC_INFO提供的缓存*/
+        >
+        >   } arg;
+        >
+        > **函数返回值**
+        >
+        > 成功：大于或等于0，具体说明请参照表15-4
+        >
+        > 出错：-1，错误原因存于error中
+        >
+        > **附加说明**
+        >
+        > semid_ds结构见上文信号量集内核结构定义
+        >
+        > **错误代码**
+        >
+        > EACCESS：权限不够
+        >
+        > EFAULT：arg指向的地址无效
+        >
+        > EIDRM：信号量集已经删除
+        >
+        > EINVAL：信号量集不存在，或者semid无效
+        >
+        > EPERM：进程有效用户没有cmd的权限
+        >
+        > ERANGE：信号量值超出范围
+        >
+        > | 命令     | 解释                                                         |
+        > | -------- | ------------------------------------------------------------ |
+        > | IPC_STAT | 从信号量集上检索semid_ds结构，并存到semun联合体参数的成员buf的地址中 |
+        > | IPC_SET  | 设置一个信号量集合的semid_ds结构中ipc_perm域的值，并从semun的buf中取出值 |
+        > | IPC_RMID | 从内核中删除信号量集合                                       |
+        > | GETALL   | 从信号量集合中获得所有信号量的值，并把其整数值存到semun联合体成员的一个指针数组中 |
+        > | GETNCNT  | 返回当前等待资源的进程个数                                   |
+        > | GETPID   | 返回最后一个执行系统调用semop()进程的PID                     |
+        > | GETVAL   | 返回信号量集合内单个信号量的值                               |
+        > | GETZCNT  | 返回当前等待100%资源利用的进程个数                           |
+        > | SETALL   | 与GETALL正好相反                                             |
+        > | SETVAL   | 用联合体中val成员的值设置信号量集合中单个信号量的值          |
+
+        由此我们可以得知这两个程序中使用了一个信号量完成两个进程之间的互斥，此信号量的初始值在循环开始之前被semctl函数设置为0，随后在进入循环之前Sender进程的sembuf中的val值设置为1，Receiver进程中的sembuf中的val值设置为-1，分别表示在之后的semop操作中将信号量的值加一和减一。而在循环进行中进入临界区之前，再次通过semtcl函数返回信号量的值进行判断，其中Sender进程只在值为0时进入临界区，Receiver进程只在值位1时进入临界区，如此两个进程之间的互斥访问可以完美实现。
+
+        如果删去相关的互斥代码，我们可以推测出Sender进程的表现不会有太大区别（scanf函数限制其运行方式），而Receiver进程不会等待Sender进程更新共享进程内的字符而是会从运行的一开始就快速重复循环打印内存中的字符，但打印的字符每次都会从内存中读取，因此当Sender进程更新内存中的字符时，Receiver打印的字符也会相应得更新。最后这两个进程仍能够使用原先的机制共同退出。
+
+        下面对删除互斥代码的程序进行编译运行：
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1ruky129cj30uz029q3g.jpg)
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1ruldp1g9j30us023t96.jpg)
+
+        同上一步一样进行测试（这里将Receiver的打印间隔设置为1s）：
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1ruohfhc7j30un06m0ta.jpg)
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1rupeldbuj30nm0b8jsd.jpg)
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1ruq1yk00j30jv0bcgmq.jpg)
+
+        实验测试结果如我们预测的一致。
+
+      - 共享内存地址探究
+
+        如题意要求，每次进程输出时将其内存打印出，下面为修改源码后的编译执行的结果：
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1rvati3zej30mb08f0to.jpg)
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1rvb24haqj30jt05zgm6.jpg)
+
+        如图所示，两个进程显示的内存地址并不一致，这似乎与我们内存共享的机制不符。但结合实验一中我们了解到的虚拟内存机制，这一现象也是能够得到解释的。操作系统为进程分配的内存地址并不是实际的物理内存地址，而是一个虚拟内存地址，通过页表的映射，可以将虚拟内存地址转换为物理内存地址。
+
+        我们运行的两个进程在初始化的时候使用了shmat函数，此函数的作用是将共享内存空间挂载到进程中，实则就是对进程分配字符串的虚拟内存映射到共享内存的物理内存，从而实现内存的共享。所以虽然我们打印出来的内存地址不一样，但是它们实际映射的物理内存地址是一致的。
+
+   2. 有名管道和无名管道通信系统调用是否已经实现了同步机制？通过实验验证，发送者和接收者如何同步的。比如，在什么情况下，发送者会阻塞，什么情况下，接收者会阻塞？
+
+      - 无名管道
+
+        无名管道常用于连通父子进程，用于双方的通信，而博客中给出的示例程序并未使用多个进程，因此不能很好地到达实验验证的目的，这里我们对其源代码做了一些修改，采用fork的方式构造父子进程之间的通信，以下为程序源码`pipe.c`：
+
+        ```c
+        /*
+         * Filename: pipe.c
+         */
+         
+        #include <stdio.h>
+        #include <unistd.h>     //for pipe()
+        #include <string.h>     //for memset()
+        #include <stdlib.h>     //for exit()
+        
+        int main()
+        {
+            int fd[2];
+            char buf[20];
+            if(-1 == pipe(fd))
+            {
+                perror("pipe");
+                exit(EXIT_FAILURE);
+            }
+            pid_t pid;
+            pid = fork();
+        
+            if(!pid){
+                write(fd[1], "hello,world", 12);
+                memset(buf, '\0', sizeof(buf));
+            }
+        
+            else if(pid>0){
+                read(fd[0], buf, 12);
+                printf("The message is: %s\n", buf);
+            }
+        
+            else{
+                perror("fork");
+                exit(1);
+            }
+        
+            return 0;
+        }
+        ```
+
+        这里将父进程设置为读进程，子进程设置为写进程，我们在Linux终端下将其编译运行：
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1rzzscixmj30sh021t99.jpg)
+
+        由结果可以得到两个进程之间的通信顺利，随后我们对程序稍作修改，分别使写进程和读进程休眠1s，继续观察结果：
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1s024efz7j30sm053q4w.jpg)
+
+        可见结果均正确，我们可以验证无名管道可以完成进程之间的同步，下面我们可以分析其同步机制的实现。
+
+        当两个进程同时运行时，其分别对两个存储文件描述符进行操作，初始情况下，管道中无疑不含数据，此时若写进程先进入管道写数据，完成后读进程再进入管道读数据，这一过程无疑能够完成进程之间的同步，而若读进程先进入管道中，此时管道中无数据，其便会阻塞，等待写进程进入写入数据之后，都进程才会激活并读出数据。而若写进程在写入的时候管道内前一次的数据还没有被读取，其便会阻塞，等待读进程读取完毕将其激活。
+
+        随后我们可以再次对程序做一些修改，分别用读进程和写进程进行三次操作，观察其结果：
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1s0lav9zvj30sk03nq40.jpg)
+
+        如图所示结果仍然完全正确，符合我们的结论。至此可以判断无名管道能够实现同步。
+
+      - 有名管道
+
+        有名管道可用于更为广泛的进程之间的通信，但其区别于无名通道的一点则是通信双方必须同时存在，否则便会阻塞。有名管道的开启需要创建相关文件，随后两个文件再对文件进行操作，但写入和读取的数据并不会存储在文件中，而是直接置于内存中。由此我们也可以知道其读写操作是同时进行的。下面我们由其给出的示例代码进行实验验证。
+
+        写进程源代码`fifo_send.c`：
+
+        ```c
+        /*
+         *File: fifo_send.c
+         */
+         
+        #include <stdio.h>
+        #include <stdlib.h>
+        #include <unistd.h>
+        #include <sys/stat.h>
+        #include <sys/ipc.h>
+        #include <fcntl.h>
+        
+        
+        #define FIFO "/tmp/my_fifo"
+        
+        int main()
+        {
+            char buf[] = "hello,world";
+        
+            //`. check the fifo file existed or not
+            int ret;
+            ret = access(FIFO, F_OK);
+            if(ret == 0)    //file /tmp/my_fifo existed
+            {
+                system("rm -rf /tmp/my_fifo");
+            }
+        
+            //2. creat a fifo file
+            if(-1 == mkfifo(FIFO, 0766))
+            {
+                perror("mkfifo");
+                exit(EXIT_FAILURE);
+            }
+        
+            //3.Open the fifo file
+            int fifo_fd;
+            fifo_fd = open(FIFO, O_WRONLY);
+            if(-1 == fifo_fd)
+            {
+                perror("open");
+                exit(EXIT_FAILURE);
+        
+            }
+        
+            //4. write the fifo file
+            int num = 0;
+            num = write(fifo_fd, buf, sizeof(buf));
+            if(num < sizeof(buf))
+            {
+                perror("write");
+                exit(EXIT_FAILURE);
+            }
+        
+            printf("write the message ok!\n");
+        
+            close(fifo_fd);
+        
+            return 0;
+        }
+        ```
+
+        读进程源代码`fifo_rcv.c`：
+
+        ```c
+        /*
+         *File: fifo_rcv.c
+         */
+         
+        #include <stdio.h>
+        #include <string.h>
+        #include <stdlib.h>
+        #include <unistd.h>
+        #include <sys/stat.h>
+        #include <sys/ipc.h>
+        #include <fcntl.h>
+        
+        
+        #define FIFO "/tmp/my_fifo"
+        
+        int main()
+        {
+            char buf[20] ;
+            memset(buf, '\0', sizeof(buf));
+        
+            //`. check the fifo file existed or not
+            int ret;
+            ret = access(FIFO, F_OK);
+            if(ret != 0)    //file /tmp/my_fifo existed
+            {
+                fprintf(stderr, "FIFO %s does not existed", FIFO);
+                exit(EXIT_FAILURE);
+            }
+        
+            //2.Open the fifo file
+            int fifo_fd;
+            fifo_fd = open(FIFO, O_RDONLY);
+            if(-1 == fifo_fd)
+            {
+                perror("open");
+                exit(EXIT_FAILURE);
+        
+            }
+        
+            //4. read the fifo file
+            int num = 0;
+            num = read(fifo_fd, buf, sizeof(buf));
+        
+            printf("Read %d words: %s\n", num, buf);
+        
+            close(fifo_fd);
+        
+            return 0;
+        }
+        ```
+
+        在Linux终端在编译并运行：
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1s175i5aoj30up021jrv.jpg)
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1s17p65hej30us01wq3f.jpg)
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1s1815aguj30mr01c3yn.jpg)
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1s18dn0k8j30n701at8v.jpg)
+
+        由图所示，当写进程单独运行时，尽管管道中不存在数据，但其仍处于阻塞状态，随后读进程进入之后，读写进程之间实现了通信，进程得以工作并结束，这与上文的描述相符。
+
+        然而当先运行读进程之时，读进程会和预想中一样阻塞，但在运行了写进程之后两个进程仍处于阻塞状态，这和理论出现了偏差，通过仔细阅读提供的源码，我们大概可以发现其问题所在：由有名管道的介绍我们可以得知，有名管道建立之时需要创建相关文件，而在其提供的示例程序中只有写进程在运行是会创建文件，读进程只会检测是否有文件存在，一旦没有文件存在便会报错。而写进程在创建文件之前会先检查是否已有同名文件存在（此文件一般由上次运行该程序时留下，因为该程序在退出时并没有删除相关文件），存在则删除原文件再创建新文件。
+
+        通过以上文件创建过程的梳理，我们便可以猜测出两个进程均阻塞的原因：由于文件的残留，读进程先运行之后先访问了原先的文件，进入阻塞状态，而写进程在运行之后检测到原文件的存在，将其进行了删除并创建了新文件，如此便相当于两个进程并不在一个有名管道两边，自然均处于阻塞状态。
+
+        为验证以上想法，我们可以在`fifo_send.c`结束之前加入文件删除的语句：
+
+        ```c
+         system("rm -rf /tmp/my_fifo");
+        ```
+
+        首先我们将新编辑的源代码在Linux终端下编译并运行：
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1vb87ozi2j30qf03ut9w.jpg)
+
+        随后运行读进程：
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1vb8uub2yj30nn01c0sw.jpg)
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1vb94nwdcj30ov02iq3f.jpg)
+
+        这与上文进行的结果一致，但由于我们的修改，此时系统中已经不含此次创建的管道文件了，随后我们再先运行读进程：
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1vbai8j2aj30ng01cmxc.jpg)
+
+        和预期的一致，因为不存在文件读进程直接报错退出，不再阻塞，实验结果验证了我们先前的猜想。
+
+        随后我们可以进一步进行猜想：如果读进程先创建文件，该机制还能否顺利进行同步呢？
+
+        根据此需求我们对两个进程的源代码进行修改：写进程和读进程对文件的操作互换。修改完成之后重新编译并运行程序（先运行读进程，再运行写进程）：
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1vbl2f40mj30qm02lmxr.jpg)
+
+        ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1vbll0az6j30qc01yt93.jpg)
+
+        由图可见结果依然正确，所以有名管道无论哪一方先创建文件或是先访问均可，但必须二者同时访问一个管道才能保证同步正常执行，否则均会处于阻塞状态。至此有名管道的运行机制我们已梳理清楚。
+
+   3. 消息通信系统调用是否已经实现了同步机制？通过实验验证，发送者和接收者如何同步的。比如，在什么情况下，发送者会阻塞，什么情况下，接收者会阻塞？
+
+      消息通信系统调用也是进程之间实现同步机制的一种方式，下面我们首先通过运行博客中给出的实例来感受一下其运行的过程。
+
+      客户端源代码`Client.c`：
+
+      ```c
+      #include <stdio.h>
+      #include <stdlib.h>
+      #include <string.h>
+      #include <unistd.h>
+      #include <sys/types.h>
+      #include <sys/msg.h>
+      #include <sys/ipc.h>
+      #include <signal.h>
+      
+      #define BUF_SIZE 128
+      
+      //Rebuild the strcut (must be)
+      struct msgbuf
+      {
+          long mtype;
+          char mtext[BUF_SIZE];
+      };
+      
+      
+      int main(int argc, char *argv[])
+      {
+          //1. creat a mseg queue
+          key_t key;
+          int msgId;
+          
+          printf("THe process(%s),pid=%d started~\n", argv[0], getpid());
+      
+          key = ftok(".", 0xFF);
+          msgId = msgget(key, IPC_CREAT|0644);
+          if(-1 == msgId)
+          {
+              perror("msgget");
+              exit(EXIT_FAILURE);
+          }
+      
+          //2. creat a sub process, wait the server message
+          pid_t pid;
+          if(-1 == (pid = fork()))
+          {
+              perror("vfork");
+              exit(EXIT_FAILURE);
+          }
+      
+          //In child process
+          if(0 == pid)
+          {
+              while(1)
+              {
+                  alarm(0);
+                  alarm(100);     //if doesn't receive messge in 100s, timeout & exit
+                  struct msgbuf rcvBuf;
+                  memset(&rcvBuf, '\0', sizeof(struct msgbuf));
+                  msgrcv(msgId, &rcvBuf, BUF_SIZE, 2, 0);                
+                  printf("Server said: %s\n", rcvBuf.mtext);
+              }
+              
+              exit(EXIT_SUCCESS);
+          }
+      
+          else    //parent process
+          {
+              while(1)
+              {
+                  usleep(100);
+                  struct msgbuf sndBuf;
+                  memset(&sndBuf, '\0', sizeof(sndBuf));
+                  char buf[BUF_SIZE] ;
+                  memset(buf, '\0', sizeof(buf));
+                  
+                  printf("\nInput snd mesg: ");
+                  scanf("%s", buf);
+                  
+                  strncpy(sndBuf.mtext, buf, strlen(buf)+1);
+                  sndBuf.mtype = 1;
+      
+                  if(-1 == msgsnd(msgId, &sndBuf, strlen(buf)+1, 0))
+                  {
+                      perror("msgsnd");
+                      exit(EXIT_FAILURE);
+                  }
+                  
+                  //if scanf "end~", exit
+                  if(!strcmp("end~", buf))
+                      break;
+              }
+              
+              printf("THe process(%s),pid=%d exit~\n", argv[0], getpid());
+          }
+      
+          return 0;
+      }
+      ```
+
+      服务端源代码`Server.c`：
+
+      ```c
+      #include <stdio.h>
+      #include <stdlib.h>
+      #include <string.h>
+      #include <unistd.h>
+      #include <sys/types.h>
+      #include <sys/msg.h>
+      #include <sys/ipc.h>
+      #include <signal.h>
+      
+      #define BUF_SIZE 128
+      
+      //Rebuild the strcut (must be)
+      struct msgbuf
+      {
+          long mtype;
+          char mtext[BUF_SIZE];
+      };
+      
+      
+      int main(int argc, char *argv[])
+      {
+          //1. creat a mseg queue
+          key_t key;
+          int msgId;
+          
+          key = ftok(".", 0xFF);
+          msgId = msgget(key, IPC_CREAT|0644);
+          if(-1 == msgId)
+          {
+              perror("msgget");
+              exit(EXIT_FAILURE);
+          }
+      
+          printf("Process (%s) is started, pid=%d\n", argv[0], getpid());
+      
+          while(1)
+          {
+              alarm(0);
+              alarm(600);     //if doesn't receive messge in 600s, timeout & exit
+              struct msgbuf rcvBuf;
+              memset(&rcvBuf, '\0', sizeof(struct msgbuf));
+              msgrcv(msgId, &rcvBuf, BUF_SIZE, 1, 0);                
+              printf("Receive msg: %s\n", rcvBuf.mtext);
+              
+              struct msgbuf sndBuf;
+              memset(&sndBuf, '\0', sizeof(sndBuf));
+      
+              strncpy((sndBuf.mtext), (rcvBuf.mtext), strlen(rcvBuf.mtext)+1);
+              sndBuf.mtype = 2;
+      
+              if(-1 == msgsnd(msgId, &sndBuf, strlen(rcvBuf.mtext)+1, 0))
+              {
+                  perror("msgsnd");
+                  exit(EXIT_FAILURE);
+              }
+                  
+              //if scanf "end~", exit
+              if(!strcmp("end~", rcvBuf.mtext))
+                   break;
+          }
+              
+          printf("THe process(%s),pid=%d exit~\n", argv[0], getpid());
+      
+          return 0;
+      }
+      ```
+
+      在Linux终端下编译并运行这两个程序：
+
+      ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1s2qi6pdkj30tj01yaao.jpg)
+
+      ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1s2qwcrymj30ub01w0td.jpg)
+
+      在客户端输入发送的消息：
+
+      ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1s2rzr2zoj30lo06mdge.jpg)
+
+      ![1554470709636](D:\Markdown\1554470709636.png)
+
+      可见程序之间的通信正确无误，下面我们对其同步机制进行一个简要的分析。
+
+      在此机制中，发送端传送的消息都会加入一个消息队列，这个队列中的消息节点的大小和类型由我们编写程序之时自行定义。写进程在此机制中不会被阻塞，其写入的字符串会一直被添加至队列的末端，而读进程会从队列的首端一直读取消息，消息节点一旦被读取便会移除队列。当队列中不含其需要类型的消息时便会阻塞。
+
+      在此程序中，实则总共有三个进程，其中客户端有一个写进程和一个读进程，服务端则先后进行读操作和写操作。具体工作流程为客户端写进程先进行写操作，添加1类型信息至队列中，服务端若侦测到消息队列中有为接收的1类型信息便会将其接收并移除队列，随后将此1类型消息变为2类型消息添加至队列中，此时客户端的读进程便会读取此2类型的消息，完成一个完整的通信交互。
+
+      为验证我们得出的阻塞规则，我们可以先只开启客户端进行多条信息传输，再开启服务端观察结果：
+
+      ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1s352tr0ij30mm04ygm3.jpg)
+
+      如图所示客户端写进程并未阻塞，随后打开服务端：
+
+      ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1s35t7hr5j30mx03174r.jpg)
+
+      ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1s367ue9bj30j901zdfv.jpg)
+
+      如图所示进程之间的通信完成符合要求，至此我们可以确认消息系统调用能够完成进程之间的通信，具有完善的同步机制。
+
+5. **阅读Pintos操作系统，找到并阅读进程上下文切换的代码，说明实现的保存和恢复的上下文内容以及进程切换的工作流程。**
+
+   由于涉及到进程的工作机制，我们可以优先从源码中的threads/thread.h部分开始探究。
+
+   - 进程结构体简介
+
+     我们首先进入pintos操作系统源码中的src/threads/thread.h，可以看到在开始做大部分声明之前有一长段注释：
+
+     ```c
+     /* A kernel thread or user process.
+     
+        Each thread structure is stored in its own 4 kB page.  The
+        thread structure itself sits at the very bottom of the page
+        (at offset 0).  The rest of the page is reserved for the
+        thread's kernel stack, which grows downward from the top of
+        the page (at offset 4 kB).  Here's an illustration:
+     
+             4 kB +---------------------------------+
+                  |          kernel stack           |
+                  |                |                |
+                  |                |                |
+                  |                V                |
+                  |         grows downward          |
+                  |                                 |
+                  |                                 |
+                  |                                 |
+                  |                                 |
+                  |                                 |
+                  |                                 |
+                  |                                 |
+                  |                                 |
+                  +---------------------------------+
+                  |              magic              |
+                  |                :                |
+                  |                :                |
+                  |               name              |
+                  |              status             |
+             0 kB +---------------------------------+
+     
+        The upshot of this is twofold:
+     
+           1. First, `struct thread' must not be allowed to grow too
+              big.  If it does, then there will not be enough room for
+              the kernel stack.  Our base `struct thread' is only a
+              few bytes in size.  It probably should stay well under 1
+              kB.
+     
+           2. Second, kernel stacks must not be allowed to grow too
+              large.  If a stack overflows, it will corrupt the thread
+              state.  Thus, kernel functions should not allocate large
+              structures or arrays as non-static local variables.  Use
+              dynamic allocation with malloc() or palloc_get_page()
+              instead.
+     
+        The first symptom of either of these problems will probably be
+        an assertion failure in thread_current(), which checks that
+        the `magic' member of the running thread's `struct thread' is
+        set to THREAD_MAGIC.  Stack overflow will normally change this
+        value, triggering the assertion. */
+     ```
+
+     我们简单得对这段文字进行一下翻译：
+
+     > 此结构体表示线程或用户进程。在项目中，您必须将自己的成员添加到struct thread中。您还可以更改或删除现有成员的定义。
+     >
+     > 每个结构线程占据其自己的内存页面的开头。页面的其余部分用于线程的堆栈，该堆栈从页面末尾向下增长。
+     >
+     > 这有两个注意事项。首先，不允许线程结构变得太大。否则内核堆栈就没有足够的空间。基本的线程结构的大小只有几个字节。它应该保持在1 kB以下。
+     >
+     > 其次，不得允许内核堆栈增长太大。如果堆栈溢出，则会破坏线程状态。因此，内核函数不应将大型结构或数组分配为非静态局部变量。使用malloc（）或palloc_get_page（）代替动态分配
+
+     这段注释简单得向我们介绍了线程结构体的栈，也提醒了我们在后其修改此结构体时应该注意的一些事项，读完过后我们可以继续向下阅读结构体的具体声明代码：
+
+     ```c
+     struct thread
+       {
+         /* Owned by thread.c. */
+         tid_t tid;                          /* Thread identifier. */
+         enum thread_status status;          /* Thread state. */
+         char name[16];                      /* Name (for debugging purposes). */
+         uint8_t *stack;                     /* Saved stack pointer. */
+         int priority;                       /* Priority. */
+         int original_priority;              /* Priority, before donation */
+         struct list_elem allelem;           /* List element for all threads list. */
+         struct list_elem waitelem;          /* List element, stored in the wait_list queue */
+         int64_t sleep_endtick;              /* The tick after which the thread should awake (if the thread is in sleep) */
+     
+         /* Shared between thread.c and synch.c. */
+         struct list_elem elem;              /* List element, stored in the ready_list queue */
+     
+         // needed for priority donations
+         struct lock *waiting_lock;          /* The lock object on which this thread is waiting (or NULL if not locked) */
+         struct list locks;                  /* List of locks the thread holds (for multiple donations) */
+     
+     #ifdef USERPROG
+         /* Owned by userprog/process.c. */
+         uint32_t *pagedir;                  /* Page directory. */
+     
+         // Project 2: file descriptors and process table
+         /* Owned by userprog/process.c and userprog/syscall.c */
+     
+         struct process_control_block *pcb;  /* Process Control Block */
+         struct list child_list;             /* List of children processes of this thread,
+                                               each elem is defined by pcb#elem */
+     
+         struct list file_descriptors;       /* List of file_descriptors the thread contains */
+     
+         struct file *executing_file;        /* The executable file of associated process. */
+     
+         uint8_t *current_esp;               /* The current value of the user program’s stack pointer.
+                                                A page fault might occur in the kernel, so we might
+                                                need to store esp on transition to kernel mode. (4.3.3) */
+     #endif
+     
+     #ifdef VM
+         // Project 3: Supplemental page table.
+         struct supplemental_page_table *supt;   /* Supplemental Page Table. */
+     
+         // Project 3: Memory Mapped Files.
+         struct list mmap_list;              /* List of struct mmap_desc. */
+     #endif
+     
+         // Project 4: CWD.
+         struct dir *cwd;
+     
+         /* Owned by thread.c. */
+         unsigned magic;                     /* Detects stack overflow. */
+       };
+     ```
+
+     结合注释和官方的说明文档，我们详细解释一下每个成员的含义以及作用：
+
+     - tid_t **tid**：线程的线程标识符。每个线程必须具有在内核的整个生命周期内唯一的tid。默认情况下，tid_t是int的typedef，每个新线程接收数字上的下一个更高的tid，从初始进程的1开始。
+     - enum thread_status **status**：线程的状态，一共有以下四种：
+       - **THREAD_RUNNING**：线程在给定时间内正在运行。可以通过 thread_current（）函数返回正在运行的线程。
+       - **THREAD_READY**：该线程已准备好运行，但它现在没有运行。可以选择线程以在下次调用调度程序时运行。就绪线程保存在名为ready_list的双向链表中
+       - **THREAD_BLOCKED**：线程正在等待某些事务，例如锁定变为可用，要调用的中断。在通过调用thread_unblock（函数）转换到THREAD_READY状态之前，线程不会再次调度。
+       - **THREAD_DYING**：切换到下一个线程后，调度程序将销毁该线程。
+     - char **name[16]**：线程命名的字符串，至少前几个数组单元为字符。
+     - uint8_t ***stack**：线程的栈指针。当线程运行时，CPU的堆栈指针寄存器跟踪堆栈的顶部，并且该成员未使用。但是当CPU切换到另一个线程时，该成员保存线程的堆栈指针。保存线程的寄存器不需要其他成员，因为必须保存的其他寄存器保存在堆栈中。
+     - int **priority**：线程优先级，范围从PRI_MIN（0）到PRI_MAX（63）。较低的数字对应较低的优先级，因此优先级0是最低优先级，优先级63是最高优先级。
+     - struct list_elem **allelem**：用于将线程链接到所有线程的列表中。每个线程在创建时都会插入到此列表中，并在退出时删除。应该使用thread_foreach（）函数来迭代所有线程。
+     - struct list_elem **elem**：用于将线程放入双向链表：ready_list（准备好运行的线程列表）或sema_down（等待信号量的线程列表）。
+     - uint32_t ***pagedir**：页表指针，用于将进程结构的虚拟地址映射到物理地址。
+     - unsigned **magic**：始终设置为THREAD_MAGIC，它只是threads / thread.c中定义的任意数字，用于检测堆栈溢出。
+
+     通过仔细分析这些结构体成员的含义，我们可以初步判断进程的保存与恢复状态也是用栈来实现的，栈指针***stack**可以的当作我们接下来分析的切入点。接着我们继续看一下进程函数的声明。
+
+   - 进程函数简介
+
+     首先我们打开源码中函数的声明，相比于结构体的定义，函数的声明并未撰写太多注释，我们只能根据函数名和官方说明文档来对部分可能在进程切换时用到的函数进行定位，在thread.c文件中根据其定义做进一步的探究。通过阅读函数的定义源码，我们可以看到进程的保存恢复以及切换和以下函数关系密切：
+
+     ```c
+     /* Schedules a new process.  At entry, interrupts must be off and
+        the running process's state must have been changed from
+        running to some other state.  This function finds another
+        thread to run and switches to it.
+     
+        It's not safe to call printf() until thread_schedule_tail()
+        has completed. */
+     static void
+     schedule (void)
+     {
+       struct thread *cur = running_thread ();
+       struct thread *next = next_thread_to_run ();
+       struct thread *prev = NULL;
+     
+       ASSERT (intr_get_level () == INTR_OFF);
+       ASSERT (cur->status != THREAD_RUNNING);
+       ASSERT (is_thread (next));
+     
+       if (cur != next)
+         prev = switch_threads (cur, next);
+       thread_schedule_tail (prev);
+     }
+     ```
+
+     `schedule()`是负责切换线程的主要函数，其主要被`thread_block()`，`thread_exit()`，和`thread_yield()`这三次函数调用，下面我们仔细分析一下此函数的具体实现：首先其定义了三个thread结构体的指针，均为局部变量，cur指针指向`running_thread ()`函数的返回值，我们可以进入此函数观察其具体实现：
+
+     ```c
+     /* Returns the running thread. */
+     struct thread *
+     running_thread (void)
+     {
+       uint32_t *esp;
+     
+       /* Copy the CPU's stack pointer into `esp', and then round that
+          down to the start of a page.  Because `struct thread' is
+          always at the beginning of a page and the stack pointer is
+          somewhere in the middle, this locates the curent thread. */
+       asm ("mov %%esp, %0" : "=g" (esp));
+       return pg_round_down (esp);
+     }
+     ```
+
+     此函数嵌入了汇编代码，将CPU堆栈指针（总是在最顶端）复制到“esp”中，然后四舍五入到页面的开头。因为“struct thread”总是在页面的开头，而堆栈指针位于中间的某个位置，所以它定位当前线程。因此cur指针就是当前运行线程的指针。
+
+     接着我们可以继续探究next指针的含义，进入`next_thread_to_run`函数：
+
+     ```c
+     /* Chooses and returns the next thread to be scheduled.  Should
+        return a thread from the run queue, unless the run queue is
+        empty.  (If the running thread can continue running, then it
+        will be in the run queue.)  If the run queue is empty, return
+        idle_thread. */
+     static struct thread *
+     next_thread_to_run (void)
+     {
+       if (list_empty (&ready_list))
+         return idle_thread;
+       else
+         return list_entry (list_pop_front (&ready_list), struct thread, elem);
+     }
+     ```
+
+     此函数选择并返回要调度的下一个线程。应该从运行队列返回一个线程，除非运行队列为空。如果运行队列为空，返回idle_thread。值得注意的是如果正在运行的线程可以继续运行，它便仍在运行队列中。这个函数的意义也很快就能弄清：返回下一个执行进程的指针。
+
+     最后一个prev指针这里直接定义为了NULL，我们先不用着急考虑，接下来是三个断言判断，分别保证了此时中断关闭（程序不能被中断）、当前进程不在运行状态以及存在下一个进程。经过这三个断言判断后函数才到了核心部分：如果当前进程和下一个进程不相等，则调用`switch_threads (cur, next)`将当前进程和下一个进程进行切换。这里我们自然继续进入此函数中。
+
+     `switch_threads (cur, next)`函数定义于switch.S中，使用汇编语言编写：
+
+     ```scheme
+     .globl switch_threads
+     .func switch_threads
+     switch_threads:
+     	# Save caller's register state.
+     	#
+     	# Note that the SVR4 ABI allows us to destroy %eax, %ecx, %edx,
+     	# but requires us to preserve %ebx, %ebp, %esi, %edi.  See
+     	# [SysV-ABI-386] pages 3-11 and 3-12 for details.
+     	#
+     	# This stack frame must match the one set up by thread_create()
+     	# in size.
+     	pushl %ebx
+     	pushl %ebp
+     	pushl %esi
+     	pushl %edi
+     
+     	# Get offsetof (struct thread, stack).
+     .globl thread_stack_ofs
+     	mov thread_stack_ofs, %edx
+     
+     	# Save current stack pointer to old thread's stack, if any.
+     	movl SWITCH_CUR(%esp), %eax
+     	movl %esp, (%eax,%edx,1)
+     
+     	# Restore stack pointer from new thread's stack.
+     	movl SWITCH_NEXT(%esp), %ecx
+     	movl (%ecx,%edx,1), %esp
+     
+     	# Restore caller's register state.
+     	popl %edi
+     	popl %esi
+     	popl %ebp
+     	popl %ebx
+             ret
+     .endfunc
+     ```
+
+     此函数的核心是将当前堆栈的指针保存至cur线程的堆栈，接着从next线程的堆栈中恢复当前堆栈的指针，也就是寄存器esp的操作。由此我们可以确定进程的保存与恢复就是利用CPU栈顶指针的变化进行的，进程的状态则是保存在自身的堆栈当中。switch_threads 函数的功能至此就已经结束。
+
+     至此进程的切换还没有完全结束，在`schedule()`函数的最后一行还调用了`thread_schedule_tail (prev)`函数，在这里我们可以开始探究先前被定义为NULL的指针prev的作用，进入此函数阅读其定义：
+
+     ```c
+     /* Completes a thread switch by activating the new thread's page
+        tables, and, if the previous thread is dying, destroying it.
+     
+        At this function's invocation, we just switched from thread
+        PREV, the new thread is already running, and interrupts are
+        still disabled.  This function is normally invoked by
+        thread_schedule() as its final action before returning, but
+        the first time a thread is scheduled it is called by
+        switch_entry() (see switch.S).
+     
+        It's not safe to call printf() until the thread switch is
+        complete.  In practice that means that printf()s should be
+        added at the end of the function.
+     
+        After this function and its caller returns, the thread switch
+        is complete. */
+     void
+     thread_schedule_tail (struct thread *prev)
+     {
+       struct thread *cur = running_thread ();
+     
+       ASSERT (intr_get_level () == INTR_OFF);
+     
+       /* Mark us as running. */
+       cur->status = THREAD_RUNNING;
+     
+       /* Start new time slice. */
+       thread_ticks = 0;
+     
+     #ifdef USERPROG
+       /* Activate the new address space. */
+       process_activate ();
+     #endif
+     
+       /* If the thread we switched from is dying, destroy its struct
+          thread.  This must happen late so that thread_exit() doesn't
+          pull out the rug under itself.  (We don't free
+          initial_thread because its memory was not obtained via
+          palloc().) */
+       if (prev != NULL && prev->status == THREAD_DYING && prev != initial_thread)
+         {
+           ASSERT (prev != cur);
+           palloc_free_page (prev);
+         }
+     }
+     ```
+
+     根据函数的注释我们可以得知其功能是：通过激活新线程的页表完成线程切换，如果前一个线程正在死亡，则销毁它。接下来一步步观察其具体的执行步骤。
+
+     首先其也会获取当前运行进程的指针并保证此时程序不能被中断。接着其会将当其运行进程的状态改变为THREAD_RUNNING以及初始化其时间切片，这可以看做切换进程后对新进程的一个激活。最后的部分表示如果我们切换的线程正在死亡，销毁它的struct线程。而我们传入的prev一定为NULL，所以在切换过程中这一部分并不会执行。
+
+     至此进程保存与恢复以及切换的全部流程我们已经能够较为清晰得梳理出来。
+
+   - 进程的保存与恢复及切换流程图
+
+     ![](https://ws1.sinaimg.cn/large/007HSsnBly1g1pufyhfr4j30ia0g7aat.jpg)
+
+     
+

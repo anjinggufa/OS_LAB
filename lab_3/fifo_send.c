@@ -54,5 +54,7 @@ int main()
 
     close(fifo_fd);
 
+    system("rm -rf /tmp/my_fifo");
+
     return 0;
 }
